@@ -1,5 +1,5 @@
 const BloodInventory = require('../models/BloodInventory');
-const { checkLateBloodAvailability } = require('../services/bloodSearchService');
+const { checkLateBloodAvailability, monitorActiveBloodRequests } = require('../services/bloodSearchService');
 
 // @desc    Get all blood inventory units
 // @route   GET /api/blood-bank/inventory
@@ -41,7 +41,8 @@ const addInventory = async (req, res, next) => {
       status: 'AVAILABLE'
     });
 
-    // Check if new inventory fulfills any escalated/pending requests (Late availability detection!)
+    // Check if new inventory fulfills any active requests
+    await monitorActiveBloodRequests();
     await checkLateBloodAvailability();
 
     res.status(201).json({
@@ -80,6 +81,9 @@ const updateInventory = async (req, res, next) => {
     if (expiryDate) item.expiryDate = new Date(expiryDate);
 
     await item.save();
+
+    // Re-check active requests
+    await monitorActiveBloodRequests();
 
     res.status(200).json({
       success: true,

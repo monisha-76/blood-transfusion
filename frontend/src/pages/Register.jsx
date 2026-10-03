@@ -28,7 +28,10 @@ export const Register = () => {
     try {
       const res = await register({
         ...formData,
-        extraInfo: { bloodGroup: formData.bloodGroup }
+        extraInfo: {
+          bloodGroup: formData.bloodGroup,
+          willingToDonate: true
+        }
       });
       if (res.success) {
         toast.success('Registration successful!');

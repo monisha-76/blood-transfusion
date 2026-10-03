@@ -12,6 +12,7 @@ export const PublicDonorRegister = () => {
     email: '',
     location: '',
     lastDonationDate: '',
+    willingToDonate: true,
     healthDeclaration: true,
     consent: true
   });
@@ -182,6 +183,18 @@ export const PublicDonorRegister = () => {
               />
               <span className="text-slate-300 text-[11px]">
                 I consent to be contacted by JeevanSetu for emergency blood transfusion matches.
+              </span>
+            </label>
+
+            <label className="flex items-center gap-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={formData.willingToDonate}
+                onChange={(e) => setFormData({ ...formData, willingToDonate: e.target.checked })}
+                className="w-4 h-4 rounded bg-slate-950 border-slate-800 text-rose-600 focus:ring-rose-500"
+              />
+              <span className="text-slate-300 text-[11px] font-semibold text-rose-400">
+                I confirm that I am willing and ready to donate blood if matched with an active patient requirement.
               </span>
             </label>
           </div>

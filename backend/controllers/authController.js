@@ -67,7 +67,7 @@ const register = async (req, res, next) => {
       const { assignDoctorToPatient } = require('../services/doctorAssignmentService');
       await assignDoctorToPatient(newPatient._id);
     } else if (userRole === 'DONOR') {
-      await Donor.create({
+      const newDonor = await Donor.create({
         userId: user._id,
         name: user.name,
         email: user.email,
@@ -75,8 +75,17 @@ const register = async (req, res, next) => {
         bloodGroup: extraInfo?.bloodGroup || 'B+',
         location: address || 'City Center',
         availabilityStatus: 'AVAILABLE',
+        willingToDonate: extraInfo?.willingToDonate !== false,
         verificationStatus: 'ELIGIBLE'
       });
+
+      // EVENT-DRIVEN MATCH: Automatically evaluate and notify for matching ACTIVE blood requirements
+      try {
+        const { checkAndMatchNewDonor } = require('../services/bloodSearchService');
+        await checkAndMatchNewDonor(newDonor);
+      } catch (matchErr) {
+        console.error('Error during auto donor matching on registration:', matchErr);
+      }
     }
 
     const token = generateToken({ id: user._id, role: user.role });

@@ -441,10 +441,14 @@ const processDay3SocialMediaEmergency = async () => {
         request.currentStatus = 'PUBLIC_RECRUITMENT';
         await request.save();
 
+        // AUTOMATIC SOCIAL MEDIA PUBLISHING INTEGRATION
+        const { publishCampaign } = require('./socialMediaService');
+        const publishResult = await publishCampaign(campaignResult.campaign._id);
+
         await notifyRole('HOSPITAL_MANAGEMENT', {
           type: 'SOCIAL_CAMPAIGN',
           title: 'Day 3 Social Media Emergency Campaign Launched',
-          message: `Blood remains unfulfilled after 2 days. Emergency campaign generated for ${request.requiredBloodGroup} (${request.remainingQuantity} units remaining for ${request.patient?.name}).`,
+          message: `Blood remains unfulfilled after 2 days. Emergency campaign generated (Status: ${publishResult.status}) for ${request.requiredBloodGroup} (${request.remainingQuantity} units remaining for ${request.patient?.name}).`,
           relatedEntity: { entityType: 'BloodRequest', entityId: request._id }
         });
       }

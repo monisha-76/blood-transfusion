@@ -73,10 +73,17 @@ const confirmBloodSecured = async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Unauthorized' });
     }
 
+    bloodRequest.securedQuantity = bloodRequest.requiredQuantity;
+    bloodRequest.remainingQuantity = 0;
     bloodRequest.currentStatus = 'READY_FOR_TRANSFUSION';
     bloodRequest.doctorApprovalStatus = 'APPROVED';
     bloodRequest.doctorApprovalDate = new Date();
     await bloodRequest.save();
+
+    if (bloodRequest.socialCampaignId) {
+      const { fulfillCampaign } = require('../services/socialMediaService');
+      await fulfillCampaign(bloodRequest._id);
+    }
 
     // Create Transfusion record
     await Transfusion.create({

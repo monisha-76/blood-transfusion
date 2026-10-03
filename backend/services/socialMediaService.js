@@ -1,5 +1,6 @@
 const SocialCampaign = require('../models/SocialCampaign');
 const SocialMediaAccount = require('../models/SocialMediaAccount');
+const { PLATFORM_PUBLISHERS } = require('./socialPublishers');
 
 /**
  * Fetch official configured social media accounts or return default fallback
@@ -75,7 +76,7 @@ WhatsApp: ${officialAccounts.whatsapp?.businessNumber || '+91-9876543210'}`;
 };
 
 /**
- * Creates emergency social campaign tracking record
+ * Creates emergency social campaign tracking record with initial POST_READY state
  */
 const createCampaign = async (bloodRequest, contactInfo = {}) => {
   try {
@@ -84,35 +85,38 @@ const createCampaign = async (bloodRequest, contactInfo = {}) => {
     const officialAccounts = await getOfficialSocialAccounts();
     const postContent = generateEmergencyPostText(bloodRequest, officialAccounts, clientUrl);
 
-    const timestamp = Date.now();
     const platformPosts = [
       {
-        platform: 'Twitter/X',
-        postId: `POST_TW_${timestamp}`,
-        postUrl: `${officialAccounts.twitter?.url || 'https://twitter.com/jeevansetu'}/status/${timestamp}`,
-        status: 'POST_READY',
-        publishedAt: null
-      },
-      {
         platform: 'Facebook',
-        postId: `POST_FB_${timestamp}`,
-        postUrl: `${officialAccounts.facebook?.url || 'https://facebook.com/jeevansetu.blood'}/posts/${timestamp}`,
+        postId: null,
+        postUrl: null,
         status: 'POST_READY',
-        publishedAt: null
+        publishedAt: null,
+        errorMessage: null
       },
       {
         platform: 'Instagram',
-        postId: `POST_IG_${timestamp}`,
-        postUrl: `${officialAccounts.instagram?.url || 'https://instagram.com/jeevansetu_org'}/p/${timestamp}/`,
+        postId: null,
+        postUrl: null,
         status: 'POST_READY',
-        publishedAt: null
+        publishedAt: null,
+        errorMessage: null
+      },
+      {
+        platform: 'Twitter/X',
+        postId: null,
+        postUrl: null,
+        status: 'POST_READY',
+        publishedAt: null,
+        errorMessage: null
       },
       {
         platform: 'WhatsApp',
-        postId: `POST_WA_${timestamp}`,
-        postUrl: officialAccounts.whatsapp?.url || 'https://wa.me/919876543210',
+        postId: null,
+        postUrl: null,
         status: 'POST_READY',
-        publishedAt: null
+        publishedAt: null,
+        errorMessage: null
       }
     ];
 
@@ -144,7 +148,6 @@ const createCampaign = async (bloodRequest, contactInfo = {}) => {
     return {
       success: true,
       status: 'POST_READY',
-      message: 'Emergency social media post generated and marked POST_READY. Production API dispatch ready for external credentials.',
       campaign
     };
   } catch (error) {
@@ -154,16 +157,100 @@ const createCampaign = async (bloodRequest, contactInfo = {}) => {
 };
 
 /**
- * Mark campaign as FULFILLED when blood is secured
+ * Executes automatic social-media publishing across official platform APIs
+ * Idempotent: skips platforms already marked POST_PUBLISHED
+ * @param {string|ObjectId} campaignId 
+ */
+const publishCampaign = async (campaignId) => {
+  try {
+    const campaign = await SocialCampaign.findById(campaignId);
+    if (!campaign) throw new Error(`Social Campaign #${campaignId} not found`);
+
+    if (campaign.status === 'FULFILLED') {
+      console.log(`[PUBLISH SKIPPED] Campaign #${campaignId} is already FULFILLED.`);
+      return { success: false, status: 'FULFILLED', message: 'Campaign is already fulfilled.' };
+    }
+
+    const officialAccounts = await getOfficialSocialAccounts();
+    let anyPublished = false;
+    let anyFailed = false;
+
+    for (const postItem of campaign.platformPosts) {
+      // Idempotency: Do not republish if already published
+      if (postItem.status === 'POST_PUBLISHED') {
+        console.log(`[IDEMPOTENT SKIP] ${postItem.platform} already published for Campaign #${campaign._id} (Post ID: ${postItem.postId})`);
+        anyPublished = true;
+        continue;
+      }
+
+      const publisher = PLATFORM_PUBLISHERS[postItem.platform];
+      if (!publisher) {
+        postItem.status = 'POST_FAILED';
+        postItem.errorMessage = `No publisher registered for platform: ${postItem.platform}`;
+        anyFailed = true;
+        continue;
+      }
+
+      console.log(`[PUBLISHING TO ${postItem.platform.toUpperCase()}] Campaign #${campaign._id}...`);
+      const result = await publisher(campaign.postContent, officialAccounts);
+
+      if (result.success && result.status === 'POST_PUBLISHED') {
+        postItem.status = 'POST_PUBLISHED';
+        postItem.postId = result.postId;
+        postItem.postUrl = result.postUrl;
+        postItem.publishedAt = result.publishedAt || new Date();
+        postItem.errorMessage = null;
+        anyPublished = true;
+      } else {
+        postItem.status = 'POST_FAILED';
+        postItem.errorMessage = result.errorMessage || 'Platform API publishing failed';
+        anyFailed = true;
+      }
+    }
+
+    // Top-level campaign status
+    if (anyPublished) {
+      campaign.status = 'POST_PUBLISHED';
+      campaign.publishedAt = campaign.publishedAt || new Date();
+    } else {
+      campaign.status = 'POST_FAILED';
+    }
+
+    await campaign.save();
+
+    console.log(`[CAMPAIGN PUBLISH SUMMARY] Campaign #${campaign._id} final status: ${campaign.status}`);
+    return {
+      success: anyPublished,
+      status: campaign.status,
+      campaign
+    };
+  } catch (error) {
+    console.error(`Error publishing campaign #${campaignId}:`, error);
+    throw error;
+  }
+};
+
+/**
+ * Mark campaign as FULFILLED when blood is secured and stop further publishing/retries
  */
 const fulfillCampaign = async (bloodRequestId) => {
   try {
-    const updated = await SocialCampaign.updateMany(
-      { bloodRequest: bloodRequestId, status: { $ne: 'FULFILLED' } },
-      { $set: { status: 'FULFILLED', fulfilledAt: new Date() } }
-    );
-    if (updated.modifiedCount > 0) {
-      console.log(`[SOCIAL CAMPAIGN FULFILLED] Marked campaigns for Request #${bloodRequestId} as FULFILLED.`);
+    const campaigns = await SocialCampaign.find({
+      bloodRequest: bloodRequestId,
+      status: { $ne: 'FULFILLED' }
+    });
+
+    for (const campaign of campaigns) {
+      campaign.status = 'FULFILLED';
+      campaign.fulfilledAt = new Date();
+
+      // Update all platform posts to FULFILLED
+      for (const postItem of campaign.platformPosts) {
+        postItem.status = 'FULFILLED';
+      }
+
+      await campaign.save();
+      console.log(`[SOCIAL CAMPAIGN FULFILLED] Marked Campaign #${campaign._id} for BloodRequest #${bloodRequestId} as FULFILLED.`);
     }
   } catch (err) {
     console.error('Error fulfilling social campaign:', err);
@@ -172,6 +259,7 @@ const fulfillCampaign = async (bloodRequestId) => {
 
 module.exports = {
   createCampaign,
+  publishCampaign,
   fulfillCampaign,
   getOfficialSocialAccounts,
   generateEmergencyPostText
