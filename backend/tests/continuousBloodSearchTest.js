@@ -173,9 +173,9 @@ const runTest = async () => {
     const campaign = await SocialCampaign.findById(reloadedDay3.socialCampaignId);
     console.log(`Generated Social Campaign Status: ${campaign.status}, Title: "${campaign.postContent?.title}"`);
     console.log(`Post Body preview:\n${campaign.postContent?.body}`);
-    const validPostStatuses = ['POST_READY', 'POST_CREATED', 'POST_FAILED'];
+    const validPostStatuses = ['POST_READY', 'POST_CREATED', 'POST_PUBLISHED', 'POST_FAILED'];
     if (!validPostStatuses.includes(campaign.status)) {
-      throw new Error(`Test 5 Failed: Campaign status should be POST_READY/POST_CREATED/POST_FAILED, got ${campaign.status}`);
+      throw new Error(`Test 5 Failed: Campaign status should be POST_READY/POST_CREATED/POST_PUBLISHED/POST_FAILED, got ${campaign.status}`);
     }
     // Verify no patient sensitive phone or private email is leaked in public body
     if (campaign.postContent.body.includes(patient.phone) || campaign.postContent.body.includes(patient.email)) {

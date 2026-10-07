@@ -67,11 +67,15 @@ WhatsApp: ${officialAccounts.whatsapp?.businessNumber || '+91-9876543210'}`;
     '#JeevanSetuEmergency'
   ];
 
+  const defaultBannerUrl = 'https://blood-transfusion-or6q.vercel.app/bloodposter.png';
+  const imageUrl = bloodRequest.imageUrl || process.env.INSTAGRAM_IMAGE_URL || defaultBannerUrl;
+
   return {
     title: `🚨 Urgent ${bloodRequest.requiredBloodGroup} Blood Donation Needed (${bloodRequest.hospital})`,
     body,
     hashtags,
-    registrationUrl: donorFormUrl
+    registrationUrl: donorFormUrl,
+    imageUrl
   };
 };
 
@@ -198,11 +202,13 @@ const publishCampaign = async (campaignId) => {
         postItem.status = 'POST_PUBLISHED';
         postItem.postId = result.postId;
         postItem.postUrl = result.postUrl;
+        if (result.containerId) postItem.containerId = result.containerId;
         postItem.publishedAt = result.publishedAt || new Date();
         postItem.errorMessage = null;
         anyPublished = true;
       } else {
         postItem.status = 'POST_FAILED';
+        if (result.containerId) postItem.containerId = result.containerId;
         postItem.errorMessage = result.errorMessage || 'Platform API publishing failed';
         anyFailed = true;
       }

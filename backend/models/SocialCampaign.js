@@ -28,7 +28,8 @@ const socialCampaignSchema = new mongoose.Schema({
     title: String,
     body: String,
     hashtags: [String],
-    registrationUrl: String
+    registrationUrl: String,
+    imageUrl: String
   },
   officialAccounts: {
     instagram: String,
@@ -56,6 +57,7 @@ const socialCampaignSchema = new mongoose.Schema({
   },
   platformPosts: [{
     platform: String,
+    containerId: String,
     postId: String,
     postUrl: String,
     status: {
