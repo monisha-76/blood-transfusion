@@ -88,6 +88,7 @@ const bloodRequestSchema = new mongoose.Schema({
       'READY_FOR_TRANSFUSION',
       'COMPLETED',
       'UNAVAILABLE_ESCALATED',
+      'URGENT_DOCTOR_REVIEW',
       'CANCELLED',
       'EXPIRED'
     ],

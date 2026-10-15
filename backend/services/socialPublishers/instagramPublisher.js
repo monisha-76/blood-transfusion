@@ -181,7 +181,63 @@ const publishToInstagram = async (postContent = {}, officialAccounts = {}) => {
   }
 };
 
+/**
+ * Deletes a published Instagram post using the Instagram Graph API.
+ * Endpoint: DELETE https://graph.instagram.com/v24.0/{media-id}?access_token={token}
+ * Handles errors safely, sanitizes tokens, and returns structured result.
+ */
+const deleteInstagramPost = async (mediaId) => {
+  if (!mediaId) {
+    return { success: false, errorMessage: 'No media ID provided for deletion' };
+  }
+
+  const accessToken = process.env.INSTAGRAM_ACCESS_TOKEN || process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
+  const apiBase = process.env.INSTAGRAM_API_BASE || 'https://graph.instagram.com';
+  const graphVersion = process.env.INSTAGRAM_GRAPH_VERSION || 'v24.0';
+
+  if (!accessToken) {
+    return {
+      success: false,
+      errorMessage: 'Missing access token for Instagram post deletion'
+    };
+  }
+
+  try {
+    const deleteUrl = `${apiBase}/${graphVersion}/${encodeURIComponent(mediaId)}?access_token=${encodeURIComponent(accessToken)}`;
+    const res = await fetch(deleteUrl, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok || data.error) {
+      const rawError = data.error?.message || `Instagram post deletion failed with HTTP ${res.status}`;
+      const safeError = sanitizeError(rawError, accessToken);
+      console.warn(`[INSTAGRAM POST DELETION FAILED] Media ID ${mediaId}:`, safeError);
+      return {
+        success: false,
+        mediaId,
+        errorMessage: safeError,
+        httpStatus: res.status
+      };
+    }
+
+    console.log(`[INSTAGRAM POST DELETED] Successfully deleted Media ID ${mediaId}`);
+    return {
+      success: true,
+      mediaId,
+      result: data
+    };
+  } catch (error) {
+    const safeError = sanitizeError(error.message, accessToken);
+    console.error(`[INSTAGRAM POST DELETION NETWORK ERROR] Media ID ${mediaId}:`, safeError);
+    return {
+      success: false,
+      mediaId,
+      errorMessage: `Network error deleting Instagram post: ${safeError}`
+    };
+  }
+};
+
 module.exports = {
   publishToInstagram,
+  deleteInstagramPost,
   sanitizeError
 };

@@ -1,6 +1,9 @@
 const SocialCampaign = require('../models/SocialCampaign');
 const SocialMediaAccount = require('../models/SocialMediaAccount');
+const BloodRequest = require('../models/BloodRequest');
 const { PLATFORM_PUBLISHERS } = require('./socialPublishers');
+const { deleteInstagramPost } = require('./socialPublishers/instagramPublisher');
+const { deleteCloudinaryPoster } = require('./posterGeneratorService');
 
 /**
  * Fetch official configured social media accounts or return default fallback
@@ -89,6 +92,20 @@ const createCampaign = async (bloodRequest, contactInfo = {}) => {
     const officialAccounts = await getOfficialSocialAccounts();
     const postContent = generateEmergencyPostText(bloodRequest, officialAccounts, clientUrl);
 
+    // Dynamic poster generation: overwrite imageUrl with Cloudinary URL if available.
+    // Falls back silently to the INSTAGRAM_IMAGE_URL / static URL already in postContent.
+    try {
+      const { generateAndUploadPoster } = require('./posterGeneratorService');
+      const dynamicUrl = await generateAndUploadPoster(bloodRequest);
+      if (dynamicUrl) {
+        postContent.imageUrl = dynamicUrl;
+        console.log(`[POSTER] Dynamic poster URL stored: ${dynamicUrl}`);
+      }
+    } catch (posterErr) {
+      console.warn(`[POSTER GENERATION FAILED] Falling back to static image URL. Reason: ${posterErr.message}`);
+      // postContent.imageUrl already holds the env/static fallback — no action needed
+    }
+
     const platformPosts = [
       {
         platform: 'Facebook',
@@ -170,9 +187,11 @@ const publishCampaign = async (campaignId) => {
     const campaign = await SocialCampaign.findById(campaignId);
     if (!campaign) throw new Error(`Social Campaign #${campaignId} not found`);
 
-    if (campaign.status === 'FULFILLED') {
-      console.log(`[PUBLISH SKIPPED] Campaign #${campaignId} is already FULFILLED.`);
-      return { success: false, status: 'FULFILLED', message: 'Campaign is already fulfilled.' };
+    // Strictly prevent deleted, expired, or fulfilled campaigns from being published
+    const terminalStatuses = ['FULFILLED', 'EXPIRED', 'DELETED'];
+    if (terminalStatuses.includes(campaign.status)) {
+      console.log(`[PUBLISH SKIPPED] Campaign #${campaignId} is in terminal status: ${campaign.status}. Cannot republish.`);
+      return { success: false, status: campaign.status, message: `Campaign is already ${campaign.status}.` };
     }
 
     const officialAccounts = await getOfficialSocialAccounts();
@@ -180,10 +199,10 @@ const publishCampaign = async (campaignId) => {
     let anyFailed = false;
 
     for (const postItem of campaign.platformPosts) {
-      // Idempotency: Do not republish if already published
-      if (postItem.status === 'POST_PUBLISHED') {
-        console.log(`[IDEMPOTENT SKIP] ${postItem.platform} already published for Campaign #${campaign._id} (Post ID: ${postItem.postId})`);
-        anyPublished = true;
+      // Idempotency: Do not republish if already published or in terminal status
+      if (['POST_PUBLISHED', 'FULFILLED', 'DELETED', 'EXPIRED'].includes(postItem.status)) {
+        console.log(`[IDEMPOTENT SKIP] ${postItem.platform} already in terminal/published status: ${postItem.status} for Campaign #${campaign._id} (Post ID: ${postItem.postId})`);
+        if (postItem.status === 'POST_PUBLISHED') anyPublished = true;
         continue;
       }
 
@@ -237,29 +256,136 @@ const publishCampaign = async (campaignId) => {
 };
 
 /**
- * Mark campaign as FULFILLED when blood is secured and stop further publishing/retries
+ * Rule 1: When blood is fully secured:
+ * - Mark the campaign as FULFILLED.
+ * - Delete its published Instagram post using the existing API integration where supported.
+ * - Delete its generated Cloudinary poster.
+ * - Never mark a request as fulfilled unless the full required quantity is secured.
+ * - Prevent deleted campaigns from being republished.
+ * - Handle deletion failures safely and record their actual status.
  */
 const fulfillCampaign = async (bloodRequestId) => {
   try {
+    const bloodReq = await BloodRequest.findById(bloodRequestId);
+    if (!bloodReq) {
+      console.warn(`[FULFILL WARNING] BloodRequest #${bloodRequestId} not found.`);
+      return { success: false, reason: 'BloodRequest not found' };
+    }
+
+    // Rule: Never mark a request/campaign as fulfilled unless full required quantity is secured
+    if (bloodReq.remainingQuantity > 0 || bloodReq.securedQuantity < bloodReq.requiredQuantity) {
+      console.warn(`[FULFILL REJECTED] Cannot fulfill campaign for BloodRequest #${bloodRequestId}: required=${bloodReq.requiredQuantity}, secured=${bloodReq.securedQuantity}, remaining=${bloodReq.remainingQuantity}. Full quantity is not secured.`);
+      return {
+        success: false,
+        reason: 'Required blood quantity is not fully secured'
+      };
+    }
+
     const campaigns = await SocialCampaign.find({
       bloodRequest: bloodRequestId,
-      status: { $ne: 'FULFILLED' }
+      status: { $nin: ['FULFILLED', 'DELETED'] }
     });
 
     for (const campaign of campaigns) {
       campaign.status = 'FULFILLED';
       campaign.fulfilledAt = new Date();
 
-      // Update all platform posts to FULFILLED
+      // 1. Delete published Instagram post if present
       for (const postItem of campaign.platformPosts) {
-        postItem.status = 'FULFILLED';
+        if (postItem.platform === 'Instagram' && postItem.postId) {
+          console.log(`[FULFILL CAMPAIGN] Deleting Instagram post ${postItem.postId} for Campaign #${campaign._id}...`);
+          const igDelResult = await deleteInstagramPost(postItem.postId);
+          if (igDelResult.success) {
+            postItem.status = 'DELETED';
+            postItem.deletedAt = new Date();
+            postItem.deletionStatus = 'SUCCESS';
+            postItem.deletionError = null;
+          } else {
+            postItem.deletionStatus = 'FAILED';
+            postItem.deletionError = igDelResult.errorMessage;
+            console.warn(`[FULFILL CAMPAIGN] Instagram post deletion failed safely: ${igDelResult.errorMessage}`);
+          }
+        } else if (postItem.status !== 'DELETED') {
+          postItem.status = 'FULFILLED';
+        }
+      }
+
+      // 2. Delete generated Cloudinary poster if present
+      if (campaign.postContent?.imageUrl) {
+        console.log(`[FULFILL CAMPAIGN] Deleting Cloudinary poster for Campaign #${campaign._id}...`);
+        const cldDelResult = await deleteCloudinaryPoster(campaign.postContent.imageUrl);
+        if (!cldDelResult.success && !cldDelResult.skipped) {
+          console.warn(`[FULFILL CAMPAIGN] Cloudinary poster deletion failed safely: ${cldDelResult.errorMessage}`);
+        }
       }
 
       await campaign.save();
       console.log(`[SOCIAL CAMPAIGN FULFILLED] Marked Campaign #${campaign._id} for BloodRequest #${bloodRequestId} as FULFILLED.`);
     }
+
+    return { success: true };
   } catch (err) {
     console.error('Error fulfilling social campaign:', err);
+    return { success: false, error: err.message };
+  }
+};
+
+/**
+ * Rule 2: When the patient's transfusion date expires and blood is still needed (remainingQuantity > 0):
+ * - Delete the campaign's Instagram post and generated Cloudinary poster.
+ * - Transition campaign status to EXPIRED.
+ * - Handle deletion failures safely and record actual status.
+ */
+const expireCampaign = async (bloodRequestId) => {
+  try {
+    const campaigns = await SocialCampaign.find({
+      bloodRequest: bloodRequestId,
+      status: { $nin: ['FULFILLED', 'EXPIRED', 'DELETED'] }
+    });
+
+    for (const campaign of campaigns) {
+      campaign.status = 'EXPIRED';
+      campaign.deletedAt = new Date();
+      campaign.deletionReason = 'TRANSFUSION_DATE_EXPIRED';
+
+      // 1. Delete published Instagram post if present
+      for (const postItem of campaign.platformPosts) {
+        if (postItem.platform === 'Instagram' && postItem.postId) {
+          console.log(`[EXPIRE CAMPAIGN] Deleting Instagram post ${postItem.postId} for Campaign #${campaign._id}...`);
+          const igDelResult = await deleteInstagramPost(postItem.postId);
+          if (igDelResult.success) {
+            postItem.status = 'DELETED';
+            postItem.deletedAt = new Date();
+            postItem.deletionStatus = 'SUCCESS';
+            postItem.deletionError = null;
+          } else {
+            postItem.status = 'EXPIRED';
+            postItem.deletionStatus = 'FAILED';
+            postItem.deletionError = igDelResult.errorMessage;
+            console.warn(`[EXPIRE CAMPAIGN] Instagram post deletion failed safely: ${igDelResult.errorMessage}`);
+          }
+        } else {
+          postItem.status = 'EXPIRED';
+        }
+      }
+
+      // 2. Delete generated Cloudinary poster if present
+      if (campaign.postContent?.imageUrl) {
+        console.log(`[EXPIRE CAMPAIGN] Deleting Cloudinary poster for Campaign #${campaign._id}...`);
+        const cldDelResult = await deleteCloudinaryPoster(campaign.postContent.imageUrl);
+        if (!cldDelResult.success && !cldDelResult.skipped) {
+          console.warn(`[EXPIRE CAMPAIGN] Cloudinary poster deletion failed safely: ${cldDelResult.errorMessage}`);
+        }
+      }
+
+      await campaign.save();
+      console.log(`[SOCIAL CAMPAIGN EXPIRED] Marked Campaign #${campaign._id} for BloodRequest #${bloodRequestId} as EXPIRED.`);
+    }
+
+    return { success: true };
+  } catch (err) {
+    console.error('Error expiring social campaign:', err);
+    return { success: false, error: err.message };
   }
 };
 
@@ -267,6 +393,7 @@ module.exports = {
   createCampaign,
   publishCampaign,
   fulfillCampaign,
+  expireCampaign,
   getOfficialSocialAccounts,
   generateEmergencyPostText
 };

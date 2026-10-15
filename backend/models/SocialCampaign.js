@@ -50,7 +50,8 @@ const socialCampaignSchema = new mongoose.Schema({
       'POST_PUBLISHED',
       'POST_FAILED',
       'FULFILLED',
-      'EXPIRED'
+      'EXPIRED',
+      'DELETED'
     ],
     default: 'POST_CREATED',
     index: true
@@ -62,10 +63,13 @@ const socialCampaignSchema = new mongoose.Schema({
     postUrl: String,
     status: {
       type: String,
-      enum: ['POST_CREATED', 'POST_READY', 'POST_PUBLISHED', 'POST_FAILED', 'FULFILLED'],
+      enum: ['POST_CREATED', 'POST_READY', 'POST_PUBLISHED', 'POST_FAILED', 'FULFILLED', 'DELETED', 'EXPIRED'],
       default: 'POST_READY'
     },
     publishedAt: Date,
+    deletedAt: Date,
+    deletionStatus: String,
+    deletionError: String,
     errorMessage: String
   }],
   expiryDate: {
@@ -77,6 +81,12 @@ const socialCampaignSchema = new mongoose.Schema({
   },
   fulfilledAt: {
     type: Date
+  },
+  deletedAt: {
+    type: Date
+  },
+  deletionReason: {
+    type: String
   }
 }, {
   timestamps: true
