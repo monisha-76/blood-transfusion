@@ -86,16 +86,17 @@ const checkBloodBankInventory = async (request) => {
     request.remainingQuantity = Math.max(0, request.requiredQuantity - request.securedQuantity);
     request.source = 'BLOOD_BANK';
 
-    if (request.remainingQuantity === 0) {
+    if (request.remainingQuantity === 0 && request.securedQuantity >= request.requiredQuantity) {
       request.currentStatus = 'BLOOD_SECURED';
-      if (request.socialCampaignId) {
-        await fulfillCampaign(request._id);
-      }
     } else {
       request.currentStatus = 'ACTIVE';
     }
 
     await request.save();
+
+    if (request.currentStatus === 'BLOOD_SECURED' && request.socialCampaignId) {
+      await fulfillCampaign(request._id);
+    }
 
     // Notifications
     if (request.patient && request.patient.userId) {
@@ -403,7 +404,7 @@ const monitorActiveBloodRequests = async () => {
       }
 
       // 3. If fully secured, mark BLOOD_SECURED and fulfill campaign
-      if (request.remainingQuantity === 0) {
+      if (request.remainingQuantity === 0 && request.securedQuantity >= request.requiredQuantity) {
         request.currentStatus = 'BLOOD_SECURED';
         await request.save();
         if (request.socialCampaignId) {
@@ -554,16 +555,17 @@ const confirmBloodSecured = async (bloodRequestId, unitsSecured = 1, source = 'R
   request.remainingQuantity = Math.max(0, request.requiredQuantity - request.securedQuantity);
   request.source = source;
 
-  if (request.remainingQuantity === 0) {
+  if (request.remainingQuantity === 0 && request.securedQuantity >= request.requiredQuantity) {
     request.currentStatus = 'BLOOD_SECURED';
-    if (request.socialCampaignId) {
-      await fulfillCampaign(request._id);
-    }
   } else {
     request.currentStatus = 'ACTIVE';
   }
 
   await request.save();
+
+  if (request.currentStatus === 'BLOOD_SECURED' && request.socialCampaignId) {
+    await fulfillCampaign(request._id);
+  }
 
   // If a donor match is tied to this, update donationStatus to CONFIRMED
   if (request.matchedDonorId) {
@@ -633,6 +635,75 @@ const checkLateBloodAvailability = async () => {
   }
 };
 
+/**
+ * Rule 2: When the patient's transfusion date expires and blood is still needed (remainingQuantity > 0):
+ * - Deletes the campaign's Instagram post and generated Cloudinary poster (via expireCampaign).
+ * - Marks the request as URGENT_DOCTOR_REVIEW.
+ * - Notifies the specifically assigned doctor with request details, blood group, remaining quantity, hospital, and expired transfusion date.
+ * - Notifies hospital management for procurement coordination.
+ * - Preserves all patient records and medical history.
+ * - Prevents repeated notifications and duplicate cleanup operations by checking status.
+ */
+const processExpiredTransfusions = async () => {
+  try {
+    const now = new Date();
+    // Exclude already handled or terminal requests (URGENT_DOCTOR_REVIEW, BLOOD_SECURED, COMPLETED, CANCELLED)
+    const expiredRequests = await BloodRequest.find({
+      transfusionDate: { $lt: now },
+      remainingQuantity: { $gt: 0 },
+      currentStatus: { $nin: ['URGENT_DOCTOR_REVIEW', 'BLOOD_SECURED', 'COMPLETED', 'CANCELLED'] }
+    }).populate('patient').populate('doctor');
+
+    if (expiredRequests.length === 0) return [];
+
+    console.log(`[EXPIRED TRANSFUSIONS] Found ${expiredRequests.length} unfulfilled request(s) past transfusion date.`);
+    const processed = [];
+
+    for (const request of expiredRequests) {
+      console.log(`[URGENT DOCTOR REVIEW] Request #${request._id} transfusion date expired (${request.transfusionDate.toISOString()}). Remaining: ${request.remainingQuantity} units.`);
+
+      // 1. Mark request as URGENT_DOCTOR_REVIEW and save immediately
+      request.currentStatus = 'URGENT_DOCTOR_REVIEW';
+      await request.save();
+
+      // 2. Delete campaign's Instagram post & Cloudinary poster, transition campaign status to EXPIRED
+      await expireCampaign(request._id);
+
+      // 3. Notify the specifically assigned doctor
+      const assignedDoctorId = request.doctor?._id || request.doctor || request.patient?.assignedDoctor?._id || request.patient?.assignedDoctor;
+      
+      const doctorTitle = `🚨 URGENT: Transfusion Date Expired - Blood Still Needed`;
+      const doctorMessage = `Transfusion scheduled on ${new Date(request.transfusionDate).toLocaleDateString()} for patient ${request.patient?.name || 'Unknown'} has arrived/passed, but ${request.remainingQuantity} unit(s) of ${request.requiredBloodGroup} blood remain UNSECURED at ${request.hospital}. Request #${request._id} requires immediate clinical and procurement review.`;
+
+      if (assignedDoctorId) {
+        await createNotification({
+          recipientId: assignedDoctorId,
+          type: 'URGENT_DOCTOR_REVIEW',
+          title: doctorTitle,
+          message: doctorMessage,
+          relatedEntity: { entityType: 'BloodRequest', entityId: request._id }
+        });
+        console.log(`[DOCTOR NOTIFIED] Assigned Doctor #${assignedDoctorId} notified for Request #${request._id}`);
+      }
+
+      // 4. Alert Hospital Management for emergency procurement coordination
+      await notifyRole('HOSPITAL_MANAGEMENT', {
+        type: 'URGENT_DOCTOR_REVIEW',
+        title: `URGENT DOCTOR REVIEW: ${request.requiredBloodGroup} needed for ${request.patient?.name || 'Patient'}`,
+        message: doctorMessage,
+        relatedEntity: { entityType: 'BloodRequest', entityId: request._id }
+      });
+
+      processed.push(request);
+    }
+
+    return processed;
+  } catch (error) {
+    console.error('Error in processExpiredTransfusions:', error);
+    return [];
+  }
+};
+
 module.exports = {
   initiateBloodSearch,
   checkBloodBankInventory,
@@ -643,5 +714,6 @@ module.exports = {
   processDonorResponse,
   confirmBloodSecured,
   process7DayEscalation,
-  checkLateBloodAvailability
+  checkLateBloodAvailability,
+  processExpiredTransfusions
 };

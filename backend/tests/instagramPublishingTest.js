@@ -228,6 +228,12 @@ const runInstagramTests = async () => {
     // TEST 6: Blood request fully fulfilled -> campaign becomes FULFILLED, publishing stopped
     // -------------------------------------------------------------
     console.log('\n--- TEST 6: Blood Request Fulfillment Stops Publishing ---');
+    // Rule: Request must be fully secured before campaign fulfillment
+    reqTest4.securedQuantity = reqTest4.requiredQuantity;
+    reqTest4.remainingQuantity = 0;
+    reqTest4.currentStatus = 'BLOOD_SECURED';
+    await reqTest4.save();
+
     await fulfillCampaign(reqTest4._id);
     const fulfilledCamp = await SocialCampaign.findById(campTest4._id);
     console.log(`Fulfilled campaign status: ${fulfilledCamp.status}`);

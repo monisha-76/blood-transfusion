@@ -1,7 +1,7 @@
 const SocialCampaign = require('../models/SocialCampaign');
 const SocialMediaAccount = require('../models/SocialMediaAccount');
 const BloodRequest = require('../models/BloodRequest');
-const { PLATFORM_PUBLISHERS } = require('./socialPublishers');
+const { PLATFORM_PUBLISHERS, PLATFORM_DELETERS } = require('./socialPublishers');
 const { deleteInstagramPost } = require('./socialPublishers/instagramPublisher');
 const { deleteCloudinaryPoster } = require('./posterGeneratorService');
 
@@ -38,9 +38,45 @@ const getOfficialSocialAccounts = async () => {
  */
 const generateEmergencyPostText = (bloodRequest, officialAccounts, clientUrl) => {
   const bloodGroupTag = bloodRequest.requiredBloodGroup.replace('+', 'Positive').replace('-', 'Negative');
-  const donorFormUrl = `${clientUrl}/public-donor-register`;
+  const isTest = /TEST|DEMO/i.test(bloodRequest.hospital);
+  const donorFormUrl = (!clientUrl || clientUrl.includes('localhost'))
+    ? null
+    : `${clientUrl}/public-donor-register`;
 
-  const body = `🚨 URGENT BLOOD DONATION REQUEST 🚨
+  let title;
+  let body;
+  let hashtags;
+
+  if (isTest) {
+    title = `[DEMO TEST] Urgent ${bloodRequest.requiredBloodGroup} Blood Requirement (${bloodRequest.hospital})`;
+    body = `🚨 DEMONSTRATION TEST — NOT A REAL BLOOD EMERGENCY 🚨
+[Notice: This is an automated integration test for the JeevanSetu Blood Network. Not a verified real patient emergency.]
+
+Blood Group Required: ${bloodRequest.requiredBloodGroup}
+Units Required: ${bloodRequest.remainingQuantity || bloodRequest.requiredQuantity}
+
+📍 Location:
+${bloodRequest.hospital}
+
+If you are interested in voluntary blood donation for future needs, please connect with JeevanSetu.
+
+Official Accounts:
+Instagram: ${officialAccounts.instagram?.handle || '@jeevansetu_org'}
+Facebook: ${officialAccounts.facebook?.pageName || 'Blood Emergency'}
+X / Twitter: ${officialAccounts.twitter?.handle || '@jeevansetu'}
+WhatsApp: ${officialAccounts.whatsapp?.businessNumber || '+91-9876543210'}`;
+
+    hashtags = [
+      '#BloodDonation',
+      '#DonateBlood',
+      '#SaveLives',
+      `#${bloodGroupTag}`,
+      '#JeevanSetuEmergency',
+      '#SystemTest'
+    ];
+  } else {
+    title = `🚨 Urgent ${bloodRequest.requiredBloodGroup} Blood Donation Needed (${bloodRequest.hospital})`;
+    body = `🚨 URGENT BLOOD DONATION REQUEST 🚨
 
 Blood Group Required: ${bloodRequest.requiredBloodGroup}
 Units Required: ${bloodRequest.remainingQuantity || bloodRequest.requiredQuantity}
@@ -50,11 +86,7 @@ A patient urgently requires ${bloodRequest.requiredBloodGroup} blood for an upco
 📍 Location:
 ${bloodRequest.hospital}
 
-If you are eligible and willing to donate, please fill out the voluntary donor form below.
-
-👉 Ready to Donate?
-Please fill this form:
-${donorFormUrl}
+If you are eligible and willing to donate, please fill out the voluntary donor form below.${donorFormUrl ? `\n\n👉 Ready to Donate?\nPlease fill this form:\n${donorFormUrl}` : ''}
 
 Official Accounts:
 Instagram: ${officialAccounts.instagram?.handle || '@jeevansetu_org'}
@@ -62,19 +94,20 @@ Facebook: ${officialAccounts.facebook?.pageName || 'JeevanSetu'}
 X / Twitter: ${officialAccounts.twitter?.handle || '@jeevansetu'}
 WhatsApp: ${officialAccounts.whatsapp?.businessNumber || '+91-9876543210'}`;
 
-  const hashtags = [
-    '#BloodDonation',
-    '#DonateBlood',
-    '#SaveLives',
-    `#${bloodGroupTag}`,
-    '#JeevanSetuEmergency'
-  ];
+    hashtags = [
+      '#BloodDonation',
+      '#DonateBlood',
+      '#SaveLives',
+      `#${bloodGroupTag}`,
+      '#JeevanSetuEmergency'
+    ];
+  }
 
   const defaultBannerUrl = 'https://blood-transfusion-or6q.vercel.app/bloodposter.png';
   const imageUrl = bloodRequest.imageUrl || process.env.INSTAGRAM_IMAGE_URL || defaultBannerUrl;
 
   return {
-    title: `🚨 Urgent ${bloodRequest.requiredBloodGroup} Blood Donation Needed (${bloodRequest.hospital})`,
+    title,
     body,
     hashtags,
     registrationUrl: donorFormUrl,
@@ -290,20 +323,22 @@ const fulfillCampaign = async (bloodRequestId) => {
       campaign.status = 'FULFILLED';
       campaign.fulfilledAt = new Date();
 
-      // 1. Delete published Instagram post if present
+      // 1. Delete published posts across supported platforms (Instagram, Facebook, Twitter/X)
       for (const postItem of campaign.platformPosts) {
-        if (postItem.platform === 'Instagram' && postItem.postId) {
-          console.log(`[FULFILL CAMPAIGN] Deleting Instagram post ${postItem.postId} for Campaign #${campaign._id}...`);
-          const igDelResult = await deleteInstagramPost(postItem.postId);
-          if (igDelResult.success) {
+        const deleter = PLATFORM_DELETERS[postItem.platform];
+        if (deleter && postItem.postId) {
+          console.log(`[FULFILL CAMPAIGN] Deleting ${postItem.platform} post ${postItem.postId} for Campaign #${campaign._id}...`);
+          const delResult = await deleter(postItem.postId);
+          if (delResult.success) {
             postItem.status = 'DELETED';
             postItem.deletedAt = new Date();
             postItem.deletionStatus = 'SUCCESS';
             postItem.deletionError = null;
           } else {
+            postItem.status = 'FULFILLED';
             postItem.deletionStatus = 'FAILED';
-            postItem.deletionError = igDelResult.errorMessage;
-            console.warn(`[FULFILL CAMPAIGN] Instagram post deletion failed safely: ${igDelResult.errorMessage}`);
+            postItem.deletionError = delResult.errorMessage;
+            console.warn(`[FULFILL CAMPAIGN] ${postItem.platform} post deletion failed safely: ${delResult.errorMessage}`);
           }
         } else if (postItem.status !== 'DELETED') {
           postItem.status = 'FULFILLED';
@@ -332,7 +367,7 @@ const fulfillCampaign = async (bloodRequestId) => {
 
 /**
  * Rule 2: When the patient's transfusion date expires and blood is still needed (remainingQuantity > 0):
- * - Delete the campaign's Instagram post and generated Cloudinary poster.
+ * - Delete the campaign's published posts across supported platforms and generated Cloudinary poster.
  * - Transition campaign status to EXPIRED.
  * - Handle deletion failures safely and record actual status.
  */
@@ -348,12 +383,13 @@ const expireCampaign = async (bloodRequestId) => {
       campaign.deletedAt = new Date();
       campaign.deletionReason = 'TRANSFUSION_DATE_EXPIRED';
 
-      // 1. Delete published Instagram post if present
+      // 1. Delete published posts across supported platforms (Instagram, Facebook, Twitter/X)
       for (const postItem of campaign.platformPosts) {
-        if (postItem.platform === 'Instagram' && postItem.postId) {
-          console.log(`[EXPIRE CAMPAIGN] Deleting Instagram post ${postItem.postId} for Campaign #${campaign._id}...`);
-          const igDelResult = await deleteInstagramPost(postItem.postId);
-          if (igDelResult.success) {
+        const deleter = PLATFORM_DELETERS[postItem.platform];
+        if (deleter && postItem.postId) {
+          console.log(`[EXPIRE CAMPAIGN] Deleting ${postItem.platform} post ${postItem.postId} for Campaign #${campaign._id}...`);
+          const delResult = await deleter(postItem.postId);
+          if (delResult.success) {
             postItem.status = 'DELETED';
             postItem.deletedAt = new Date();
             postItem.deletionStatus = 'SUCCESS';
@@ -361,8 +397,8 @@ const expireCampaign = async (bloodRequestId) => {
           } else {
             postItem.status = 'EXPIRED';
             postItem.deletionStatus = 'FAILED';
-            postItem.deletionError = igDelResult.errorMessage;
-            console.warn(`[EXPIRE CAMPAIGN] Instagram post deletion failed safely: ${igDelResult.errorMessage}`);
+            postItem.deletionError = delResult.errorMessage;
+            console.warn(`[EXPIRE CAMPAIGN] ${postItem.platform} post deletion failed safely: ${delResult.errorMessage}`);
           }
         } else {
           postItem.status = 'EXPIRED';

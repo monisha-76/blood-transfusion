@@ -18,7 +18,8 @@ const notificationSchema = new mongoose.Schema({
       'BLOOD_AVAILABLE',
       'BLOOD_UNAVAILABLE',
       'HOSPITAL_ESCALATION',
-      'SOCIAL_CAMPAIGN'
+      'SOCIAL_CAMPAIGN',
+      'URGENT_DOCTOR_REVIEW'
     ],
     required: true
   },

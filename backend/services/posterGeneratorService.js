@@ -71,6 +71,7 @@ const wrapText = (text, maxChars) => {
  * @returns {string} SVG markup
  */
 const buildPosterSvg = (bloodGroup, units, hospital) => {
+  const isTest = /TEST|DEMO/i.test(hospital);
   const safeBloodGroup = escapeSvg(bloodGroup);
   const safeUnits     = escapeSvg(String(units));
   const safeHospital  = escapeSvg(hospital);
@@ -87,6 +88,15 @@ const buildPosterSvg = (bloodGroup, units, hospital) => {
       `<text x="540" y="${hospitalBaseY + i * hospitalLineHeight}" font-family="Arial, sans-serif" font-size="34" font-weight="600" fill="#FFFFFF" text-anchor="middle">${line}</text>`
     )
     .join('\n    ');
+
+  const headlineText = isTest
+    ? '⚠️ DEMONSTRATION TEST — NOT A REAL BLOOD EMERGENCY'
+    : '🚨 URGENT BLOOD REQUIREMENT';
+  const testBannerSvg = isTest
+    ? `  <!-- TEST BANNER -->
+  <rect x="60" y="68" width="960" height="42" rx="8" ry="8" fill="#FFD700" opacity="0.95"/>
+  <text x="540" y="97" font-family="Arial, sans-serif" font-size="20" font-weight="900" fill="#7A0000" text-anchor="middle" letter-spacing="2">DEMONSTRATION TEST — NOT A REAL BLOOD EMERGENCY</text>`
+    : '';
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1080" viewBox="0 0 1080 1080">
   <!-- Background gradient: deep red → darker red -->
@@ -112,6 +122,7 @@ const buildPosterSvg = (bloodGroup, units, hospital) => {
 
   <!-- Central card -->
   <rect x="60" y="60" width="960" height="960" rx="24" ry="24" fill="url(#cardBg)" stroke="#FFFFFF" stroke-opacity="0.15" stroke-width="1.5"/>
+${testBannerSvg}
 
   <!-- Blood drop icon (simple SVG shape) -->
   <path d="M540 150 C540 150, 480 230, 480 285 C480 318, 507 345, 540 345 C573 345, 600 318, 600 285 C600 230, 540 150, 540 150 Z"
@@ -129,8 +140,8 @@ const buildPosterSvg = (bloodGroup, units, hospital) => {
   <line x1="140" y1="495" x2="940" y2="495" stroke="#FFD700" stroke-width="2" opacity="0.7"/>
 
   <!-- URGENT HEADLINE -->
-  <text x="540" y="550" font-family="Arial, sans-serif" font-size="36" font-weight="900"
-        fill="#FFD700" text-anchor="middle" letter-spacing="2">🚨 URGENT BLOOD REQUIREMENT</text>
+  <text x="540" y="550" font-family="Arial, sans-serif" font-size="${isTest ? '28' : '36'}" font-weight="900"
+        fill="#FFD700" text-anchor="middle" letter-spacing="2">${headlineText}</text>
 
   <!-- Blood Group (large) -->
   <text x="540" y="645" font-family="Arial, sans-serif" font-size="120" font-weight="900"

@@ -4,7 +4,8 @@ const {
   process7DayEscalation,
   checkLateBloodAvailability,
   monitorActiveBloodRequests,
-  processDay3SocialMediaEmergency
+  processDay3SocialMediaEmergency,
+  processExpiredTransfusions
 } = require('../services/bloodSearchService');
 
 /**
@@ -41,6 +42,12 @@ const initCronJobs = () => {
   cron.schedule('0 */6 * * *', async () => {
     console.log('[CRON JOB 7] Scanning for late blood availability...');
     await checkLateBloodAvailability();
+  });
+
+  // JOB 8: Every hour - Check expired transfusion dates with remaining blood needed (Urgent Doctor Review & Campaign Cleanup)
+  cron.schedule('0 * * * *', async () => {
+    console.log('[CRON EXPIRED TRANSFUSIONS] Checking for requests past transfusion date...');
+    await processExpiredTransfusions();
   });
 
   console.log('[CRON JOBS] All scheduled jobs registered successfully.');

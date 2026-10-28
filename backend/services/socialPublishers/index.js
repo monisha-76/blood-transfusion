@@ -1,6 +1,6 @@
-const { publishToFacebook } = require('./facebookPublisher');
-const { publishToInstagram } = require('./instagramPublisher');
-const { publishToTwitter } = require('./twitterPublisher');
+const { publishToFacebook, deleteFacebookPost } = require('./facebookPublisher');
+const { publishToInstagram, deleteInstagramPost } = require('./instagramPublisher');
+const { publishToTwitter, deleteTwitterPost } = require('./twitterPublisher');
 const { publishToWhatsApp } = require('./whatsappPublisher');
 
 const PLATFORM_PUBLISHERS = {
@@ -10,10 +10,20 @@ const PLATFORM_PUBLISHERS = {
   'WhatsApp': publishToWhatsApp
 };
 
+const PLATFORM_DELETERS = {
+  'Facebook': deleteFacebookPost,
+  'Instagram': deleteInstagramPost,
+  'Twitter/X': deleteTwitterPost
+};
+
 module.exports = {
   PLATFORM_PUBLISHERS,
+  PLATFORM_DELETERS,
   publishToFacebook,
+  deleteFacebookPost,
   publishToInstagram,
+  deleteInstagramPost,
   publishToTwitter,
+  deleteTwitterPost,
   publishToWhatsApp
 };

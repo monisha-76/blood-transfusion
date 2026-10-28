@@ -143,6 +143,12 @@ const runSocialPublishingTests = async () => {
 
     // TEST 5: Fulfillment Lifecycle (Blood Secured -> Campaign FULFILLED)
     console.log('\n--- TEST 5: Fulfillment Lifecycle ---');
+    // Rule: Request must be fully secured before campaign fulfillment
+    testReq.securedQuantity = testReq.requiredQuantity;
+    testReq.remainingQuantity = 0;
+    testReq.currentStatus = 'BLOOD_SECURED';
+    await testReq.save();
+
     await fulfillCampaign(testReq._id);
 
     const fulfilledCampaign = await SocialCampaign.findById(campaign._id);
@@ -151,11 +157,11 @@ const runSocialPublishingTests = async () => {
       throw new Error(`Test 5 Failed: Expected status FULFILLED with fulfilledAt timestamp!`);
     }
     for (const p of fulfilledCampaign.platformPosts) {
-      if (p.status !== 'FULFILLED') {
-        throw new Error(`Test 5 Failed: Platform ${p.platform} status should be FULFILLED, got ${p.status}`);
+      if (p.status !== 'FULFILLED' && p.status !== 'DELETED') {
+        throw new Error(`Test 5 Failed: Platform ${p.platform} status should be FULFILLED or DELETED, got ${p.status}`);
       }
     }
-    console.log('✓ Test 5 Passed: Campaign and all platform posts transitioned to FULFILLED.');
+    console.log('✓ Test 5 Passed: Campaign and all platform posts transitioned to FULFILLED/DELETED.');
 
     console.log('\n🎉 ALL 5 SOCIAL MEDIA PUBLISHING INTEGRATION TESTS PASSED!');
   } catch (err) {
